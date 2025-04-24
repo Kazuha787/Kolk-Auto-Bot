@@ -1,0 +1,47 @@
+{
+  "name": "kolk-auto-bot",
+  "version": "1.0.0",
+  "description": "🚀 Automate Klok Platform referrals, chats, tasks, and quizzes with a sleek neo-blessed terminal UI! 🌟",
+  "main": "index.js",
+  "scripts": {
+    "start": "node kol6.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "eslint .",
+    "format": "prettier --write \"**/*.js\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kazuha787/Kolk-Auto-Bot.git"
+  },
+  "keywords": [
+    "automation",
+    "klok",
+    "crypto",
+    "referrals",
+    "neo-blessed",
+    "node.js"
+  ],
+  "author": "Kazuha787 <im_Kazuha787>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/Kazuha787/Kolk-Auto-Bot/issues"
+  },
+  "homepage": "https://github.com/Kazuha787/Kolk-Auto-Bot#readme",
+  "dependencies": {
+    "axios": "^1.7.2",
+    "chalk": "^4.1.2",
+    "dotenv": "^16.4.5",
+    "ethereumjs-util": "^7.1.5",
+    "neo-blessed": "^0.2.0",
+    "uuid": "^9.0.1",
+    "web3": "^4.0.3"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "prettier": "^3.3.2"
+  },
+  "engines": {
+    "node": ">=16.0.0",
+    "npm": ">=8.0.0"
+  }
+}
