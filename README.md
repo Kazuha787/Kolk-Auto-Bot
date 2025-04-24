@@ -76,6 +76,7 @@ echo "ABC123XY" >> code.txt
 ```
 How to Use 🎮Launch the bot with
 ```
+mv 'index js' index.js
 node index.js
 ```
 ## 🗂️ File Structure 📁
