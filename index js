@@ -1,120 +1,138 @@
 require('dotenv').config();
-const axios = require('axios');
-const fs = require('fs').promises;
-const { Web3 } = require('web3');
-const { toChecksumAddress } = require('ethereumjs-util');
-const chalk = require('chalk');
-const { v4: uuidv4 } = require('uuid');
+const fs = require('fs');
+const { ethers } = require('ethers');
 const blessed = require('neo-blessed');
+const chalk = require('chalk');
+const { HttpsProxyAgent } = require('https-proxy-agent');
 
-// Configuration settings
-const CONFIG = {
-    BASE_URL: 'https://api1-pp.klokapp.ai/v1',
-    DELAY: 2000, // Wait time between requests (in ms)
-};
-
-// Color definitions for neo-blessed
 const COLORS = {
-    GREEN: '#00ff00',
-    YELLOW: '#ffff00',
-    RED: '#ff0000',
-    WHITE: '#ffffff',
-    GRAY: '#808080',
-    CYAN: '#00ffff',
-    MAGENTA: '#ff00ff',
+  GREEN: '#00ff00',
+  YELLOW: '#ffff00',
+  RED: '#ff0000',
+  WHITE: '#ffffff',
+  GRAY: '#808080',
+  CYAN: '#00ffff',
+  MAGENTA: '#ff00ff',
 };
 
-// List of crypto quiz questions
-const CRYPTO_QUESTIONS = [
-    { q: "What is Bitcoin's maximum supply?", a: ["21 million", "100 million", "1 billion", "Unlimited"], correct: 0 },
-    { q: "Who created Ethereum?", a: ["Satoshi Nakamoto", "Vitalik Buterin", "Elon Musk", "Gavin Wood"], correct: 1 },
-    { q: "What is a blockchain?", a: ["A centralized database", "A distributed ledger", "A cryptocurrency", "A wallet"], correct: 1 },
-    { q: "What does DeFi stand for?", a: ["Digital Finance", "Decentralized Finance", "Direct Funding", "Dynamic Fees"], correct: 1 },
-    { q: "Which is a layer-2 solution?", a: ["Bitcoin", "Lightning Network", "Ripple", "Cardano"], correct: 1 },
-    { q: "What is a smart contract?", a: ["A legal document", "Self-executing code", "A wallet type", "A token"], correct: 1 },
-    { q: "What is Ethereum's native token?", a: ["BTC", "ETH", "XRP", "ADA"], correct: 1 },
-    { q: "What is a gas fee?", a: ["A transaction cost", "A mining reward", "A wallet fee", "A token burn"], correct: 0 },
-    { q: "Which consensus does Bitcoin use?", a: ["Proof of Stake", "Proof of Work", "Delegated Proof", "Proof of Authority"], correct: 1 },
-    { q: "What is a DAO?", a: ["Digital Asset Option", "Decentralized Autonomous Organization", "Direct Access Object", "Dynamic Allocation"], correct: 1 },
-    { q: "What is the first cryptocurrency?", a: ["Ethereum", "Litecoin", "Bitcoin", "Ripple"], correct: 2 },
-    { q: "What is a private key?", a: ["A public address", "A secret code", "A token ID", "A wallet name"], correct: 1 },
-    { q: "What does NFT stand for?", a: ["New Financial Token", "Non-Fungible Token", "Native Fiat Token", "Networked File Type"], correct: 1 },
-    { q: "Which chain uses ADA?", a: ["Cardano", "Solana", "Polkadot", "Binance Smart Chain"], correct: 0 },
-    { q: "What is a wallet?", a: ["A blockchain", "A token", "A storage for crypto", "A mining tool"], correct: 2 },
-    { q: "What is staking?", a: ["Trading crypto", "Locking tokens for rewards", "Burning tokens", "Creating NFTs"], correct: 1 },
-    { q: "Which is a stablecoin?", a: ["BTC", "ETH", "USDT", "DOGE"], correct: 2 },
-    { q: "What is a fork?", a: ["A wallet split", "A blockchain split", "A token burn", "A mining pause"], correct: 1 },
-    { q: "What is Web3?", a: ["A browser", "A decentralized internet", "A crypto exchange", "A wallet app"], correct: 1 },
-    { q: "What is a DApp?", a: ["A desktop app", "A decentralized application", "A digital asset", "A data protocol"], correct: 1 },
+let proxies = [];
+let privateKeys = [];
+
+// Contract addresses and ABIs
+const USDC_ADDRESS = '0xef84994ef411c4981328ffce5fda41cd3803fae4';
+const R2USD_ADDRESS = '0x20c54c5f742f123abb49a982bfe0af47edb38756';
+const SR2USD_ADDRESS = '0xbd6b25c4132f09369c354bee0f7be777d7d434fa';
+const USDC_TO_R2USD_CONTRACT = '0x20c54c5f742f123abb49a982bfe0af47edb38756';
+const R2USD_TO_USDC_CONTRACT = '0x07abd582df3d3472aa687a0489729f9f0424b1e3';
+const STAKE_R2USD_CONTRACT = '0xbd6b25c4132f09369c354bee0f7be777d7d434fa';
+
+const USDC_TO_R2USD_METHOD_ID = '0x095e7a95';
+const R2USD_TO_USDC_METHOD_ID = '0x3df02124';
+const STAKE_R2USD_METHOD_ID = '0x1a5f0f00';
+
+const ERC20_ABI = [
+  'function approve(address spender, uint256 amount) external returns (bool)',
+  'function allowance(address owner, address spender) external view returns (uint256)',
+  'function balanceOf(address account) external view returns (uint256)',
+  'function decimals() external view returns (uint8)',
+];
+
+const NETWORKS = [
+  {
+    name: 'sepolia',
+    chainId: 11155111,
+    explorer: 'https://sepolia.etherscan.io',
+    rpcUrls: [
+      'https://ethereum-sepolia-rpc.publicnode.com',
+      'https://rpc.sepolia.org',
+    ],
+  },
+  {
+    name: 'plume_testnet',
+    chainId: 98867,
+    explorer: 'https://testnet-explorer.plumenetwork.xyz',
+    rpcUrls: [
+      'https://testnet-rpc.plumenetwork.xyz',
+      'https://testnet-explorer.plumenetwork.xyz/',
+    ],
+  },
+  {
+    name: 'arbitrum_sepolia',
+    chainId: 421614,
+    explorer: 'https://sepolia.arbiscan.io',
+    rpcUrls: [
+      'https://sepolia-rollup.arbitrum.io/rpc',
+    ],
+  },
 ];
 
 // Create neo-blessed screen
 const screen = blessed.screen({
-    smartCSR: true,
-    title: 'KLOK-AUTO-BOT',
-    cursor: { color: COLORS.GREEN },
+  smartCSR: true,
+  title: 'R2-AUTO-BOT',
+  cursor: { color: COLORS.GREEN },
 });
 
 // Main container
 const container = blessed.box({
-    parent: screen,
-    top: 0,
-    left: 0,
-    width: '100%',
-    height: '100%',
-    style: { bg: 'black', fg: COLORS.GREEN },
+  parent: screen,
+  top: 0,
+  left: 0,
+  width: '100%',
+  height: '100%',
+  style: { bg: 'black', fg: COLORS.GREEN },
 });
 
 // Status bar
 const statusBar = blessed.box({
-    parent: container,
-    top: 0,
-    left: 0,
-    width: '100%',
-    height: 1,
-    content: ' [KLOK-AUTO-BOT v1.0] - SYSTEM ONLINE ',
-    style: { bg: COLORS.GREEN, fg: 'black', bold: true },
+  parent: container,
+  top: 0,
+  left: 0,
+  width: '100%',
+  height: 1,
+  content: ' [R2-AUTO-BOT v2.0] - SYSTEM ONLINE ',
+  style: { bg: COLORS.GREEN, fg: 'black', bold: true },
 });
 
 // Log window
 const logWindow = blessed.log({
-    parent: container,
-    top: 1,
-    left: 0,
-    width: '70%',
-    height: '90%',
-    border: { type: 'line', fg: COLORS.GREEN },
-    style: { fg: COLORS.GREEN, bg: 'black', scrollbar: { bg: COLORS.GREEN } },
-    scrollable: true,
-    scrollbar: true,
-    tags: true,
-    padding: { left: 1, right: 1 },
+  parent: container,
+  top: 1,
+  left: 0,
+  width: '70%',
+  height: '90%',
+  border: { type: 'line', fg: COLORS.GREEN },
+  style: { fg: COLORS.GREEN, bg: 'black', scrollbar: { bg: COLORS.GREEN } },
+  scrollable: true,
+  scrollbar: true,
+  tags: true,
+  padding: { left: 1, right: 1 },
 });
 
 // Info panel
 const infoPanel = blessed.box({
-    parent: container,
-    top: 1,
-    right: 0,
-    width: '30%',
-    height: '90%',
-    border: { type: 'line', fg: COLORS.GREEN },
-    style: { fg: COLORS.GREEN, bg: 'black' },
-    content: '{center}SYSTEM INFO{/center}\n\nInitializing...',
-    tags: true,
+  parent: container,
+  top: 1,
+  right: 0,
+  width: '30%',
+  height: '90%',
+  border: { type: 'line', fg: COLORS.GREEN },
+  style: { fg: COLORS.GREEN, bg: 'black' },
+  content: '{center}SYSTEM INFO{/center}\n\nInitializing...',
+  tags: true,
 });
 
 // Input box
 const inputBox = blessed.textbox({
-    parent: container,
-    bottom: 0,
-    left: 0,
-    width: '100%',
-    height: 3,
-    border: { type: 'line', fg: COLORS.GREEN },
-    style: { fg: COLORS.GREEN, bg: 'black' },
-    hidden: true,
-    inputOnFocus: true,
+  parent: container,
+  bottom: 0,
+  left: 0,
+  width: '100%',
+  height: 3,
+  border: { type: 'line', fg: COLORS.GREEN },
+  style: { fg: COLORS.GREEN, bg: 'black' },
+  hidden: true,
+  inputOnFocus: true,
 });
 
 // Key bindings
@@ -122,500 +140,798 @@ screen.key(['escape', 'q', 'C-c'], () => process.exit(0));
 
 // Utility functions
 function colorText(text, color) {
-    return `{${color}-fg}${text}{/}`;
+  return `{${color}-fg}${text}{/}`;
 }
 
-async function loadProxies() {
-    try {
-        const data = await fs.readFile('proxy.txt', 'utf8');
-        const proxies = data.split('\n').map(line => line.trim()).filter(line => line);
-        logWindow.log(`${colorText(`Loaded ${proxies.length} proxies from proxy.txt`, COLORS.GREEN)}`);
-        return proxies;
-    } catch (err) {
-        if (err.code === 'ENOENT') {
-            logWindow.log(`${colorText('proxy.txt not found. Connecting directly.', COLORS.RED)}`);
-            return [];
-        }
-        logWindow.log(`${colorText(`Error reading proxy.txt: ${err.message}`, COLORS.RED)}`);
-        return [];
+function isValidPrivateKey(key) {
+  const cleanKey = key.startsWith('0x') ? key.slice(2) : key;
+  return /^[0-9a-fA-F]{64}$/.test(cleanKey);
+}
+
+function loadProxies() {
+  try {
+    if (fs.existsSync('./proxies.txt')) {
+      proxies = fs.readFileSync('./proxies.txt', 'utf8')
+        .split('\n')
+        .filter(line => line.trim().length > 0);
+      logWindow.log(`${colorText(`Loaded ${proxies.length} proxies from proxies.txt`, COLORS.GREEN)}`);
+    } else {
+      logWindow.log(`${colorText('proxies.txt not found. Connecting directly.', COLORS.RED)}`);
     }
+  } catch (error) {
+    logWindow.log(`${colorText(`Failed to load proxies: ${error.message}`, COLORS.RED)}`);
+  }
 }
 
-async function loadReferralCodes() {
-    try {
-        const data = await fs.readFile('code.txt', 'utf8');
-        const codes = data.split('\n').map(line => line.trim()).filter(line => line);
-        logWindow.log(`${colorText(`Loaded ${codes.length} referral codes from code.txt`, COLORS.GREEN)}`);
-        return codes;
-    } catch (err) {
-        if (err.code === 'ENOENT') {
-            logWindow.log(`${colorText('code.txt not found. Skipping referral codes.', COLORS.RED)}`);
-            return [];
-        }
-        logWindow.log(`${colorText(`Error reading code.txt: ${err.message}`, COLORS.RED)}`);
-        return [];
-    }
-}
-
-function getRandomReferralCode(codes) {
-    if (codes.length === 0) return '';
-    return codes[Math.floor(Math.random() * codes.length)];
-}
-
-async function testProxy(proxyUrl) {
-    const proxyConfig = {
-        proxy: {
-            protocol: 'http',
-            host: proxyUrl.split(':')[0],
-            port: parseInt(proxyUrl.split(':')[1]),
-        },
-    };
-    try {
-        const response = await axios.get('https://httpbin.org/ip', {
-            ...proxyConfig,
-            timeout: 10000,
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' },
+function loadPrivateKeys() {
+  try {
+    const envKeys = Object.keys(process.env).filter(key => key.startsWith('PRIVATE_KEY_'));
+    if (envKeys.length > 0) {
+      privateKeys = envKeys
+        .map(key => process.env[key])
+        .filter(key => key && key.trim().length > 0)
+        .filter(key => {
+          if (!isValidPrivateKey(key)) {
+            logWindow.log(`${colorText(`Invalid private key format for ${key.slice(0, 6)}...: must be 64 hex characters`, COLORS.RED)}`);
+            return false;
+          }
+          return true;
         });
-        logWindow.log(`${colorText(`Proxy ${proxyUrl} is functional`, COLORS.GREEN)}`);
-        return true;
-    } catch (err) {
-        logWindow.log(`${colorText(`Proxy ${proxyUrl} failed: ${err.message}`, COLORS.RED)}`);
-        return false;
     }
+    if (privateKeys.length === 0) {
+      logWindow.log(`${colorText('No valid private keys found in .env (PRIVATE_KEY_*)', COLORS.RED)}`);
+      process.exit(1);
+    }
+    logWindow.log(`${colorText(`Loaded ${privateKeys.length} private key(s) from .env`, COLORS.GREEN)}`);
+  } catch (error) {
+    logWindow.log(`${colorText(`Failed to load private keys from .env: ${error.message}`, COLORS.RED)}`);
+    process.exit(1);
+  }
 }
 
-async function selectWorkingProxy() {
-    const proxies = await loadProxies();
-    if (!proxies.length) {
-        logWindow.log(`${colorText('No proxies found in proxy.txt', COLORS.RED)}`);
-        return null;
-    }
-    for (const proxy of proxies) {
-        logWindow.log(`${colorText(`Testing proxy: ${proxy}`, COLORS.YELLOW)}`);
-        if (await testProxy(proxy)) {
-            return {
-                proxy: {
-                    protocol: 'http',
-                    host: proxy.split(':')[0],
-                    port: parseInt(proxy.split(':')[1]),
-                },
-            };
-        }
-    }
-    logWindow.log(`${colorText('Error: No working proxies found', COLORS.RED)}`);
-    return null;
+function getRandomProxy() {
+  if (proxies.length === 0) return null;
+  return proxies[Math.floor(Math.random() * proxies.length)];
 }
 
-async function saveWallet(privateKey) {
-    try {
-        await fs.appendFile('pkey.txt', `${privateKey}\n`);
-        logWindow.log(`${colorText('Wallet private key saved to pkey.txt', COLORS.GREEN)}`);
-    } catch (err) {
-        logWindow.log(`${colorText(`Error saving wallet: ${err.message}`, COLORS.RED)}`);
-    }
+function formatProxy(proxyString) {
+  if (!proxyString) return null;
+  let proxy = proxyString.trim();
+  if (proxy.includes('://')) {
+    proxy = proxy.split('://')[1];
+  }
+  let auth = '';
+  let address = proxy;
+  if (proxy.includes('@')) {
+    const parts = proxy.split('@');
+    auth = parts[0];
+    address = parts[1];
+  }
+  const [host, port] = address.split(':');
+  let username = '';
+  let password = '';
+  if (auth) {
+    const authParts = auth.split(':');
+    username = authParts[0];
+    password = authParts.length > 1 ? authParts[1] : '';
+  }
+  return {
+    host,
+    port: parseInt(port, 10),
+    auth: auth ? { username, password } : undefined,
+  };
 }
 
-async function saveToken(address, token) {
-    let data = {};
-    try {
-        data = JSON.parse(await fs.readFile('tokens.json', 'utf8'));
-    } catch (err) {
-        // File doesn't exist or is invalid JSON
-    }
-    data[address] = token;
-    await fs.writeFile('tokens.json', JSON.stringify(data, null, 2));
-    try {
-        await fs.appendFile('adrs.txt', `${address}:${token}\n`);
-        logWindow.log(`${colorText('Session token saved to adrs.txt', COLORS.GREEN)}`);
-    } catch (err) {
-        logWindow.log(`${colorText(`Error saving session token: ${err.message}`, COLORS.RED)}`);
-    }
-}
-
-async function loadXTokens() {
-    try {
-        const data = await fs.readFile('chats.txt', 'utf8');
-        const tokens = [];
-        for (const line of data.split('\n').map(line => line.trim()).filter(line => line)) {
-            try {
-                const [address, token] = line.split(':', 2);
-                tokens.push({ address, token });
-            } catch (err) {
-                logWindow.log(`${colorText(`Invalid line in chatx.txt: ${line}`, COLORS.RED)}`);
-            }
-        }
-        logWindow.log(`${colorText(`Loaded ${tokens.length} tokens from chatx.txt`, COLORS.GREEN)}`);
-        return tokens;
-    } catch (err) {
-        if (err.code === 'ENOENT') {
-            logWindow.log(`${colorText('chatx.txt not found', COLORS.RED)}`);
-            return [];
-        }
-        logWindow.log(`${colorText(`Error reading chatx.txt: ${err.message}`, COLORS.RED)}`);
-        return [];
-    }
-}
-
-async function fetchTasks(headers, proxyConfig) {
-    try {
-        const response = await axios.get(`${CONFIG.BASE_URL}/banners`, {
-            headers,
-            ...proxyConfig,
-        });
-        return response.data;
-    } catch (err) {
-        logWindow.log(`${colorText(`Error fetching tasks: ${err.message}`, COLORS.RED)}`);
-        return [];
-    }
-}
-
-async function completeTasks(headers, proxyConfig) {
-    const tasks = await fetchTasks(headers, proxyConfig);
-    logWindow.log(`${colorText('Attempting to complete tasks...', COLORS.YELLOW)}`);
-    for (const task of tasks) {
-        const taskName = task.name;
-        if (task.has_completed) {
-            logWindow.log(`${colorText(`Task ${taskName} already completed, skipping`, COLORS.GRAY)}`);
-            continue;
-        }
-        try {
-            await new Promise(resolve => setTimeout(resolve, CONFIG.DELAY));
-            const stopSpinner = showSpinner(`Completing task ${taskName}...`, `Task ${taskName} completed!`);
-            const response = await axios.post(
-                `${CONFIG.BASE_URL}/points/action/${taskName}`,
-                {},
-                { headers, ...proxyConfig }
-            );
-            stopSpinner();
-            const points = response.data.points_awarded || 0;
-            logWindow.log(`${colorText(`Task ${taskName} completed, awarded ${points} points`, COLORS.GREEN)}`);
-        } catch (err) {
-            logWindow.log(`${colorText(`Error completing task ${taskName}: ${err.message}`, COLORS.RED)}`);
-        }
-    }
-}
-
-async function performAutoChat(headers, proxyConfig) {
-    logWindow.log(`${colorText('Performing auto-chat task (10 attempts)...', COLORS.YELLOW)}`);
-    for (let attempt = 1; attempt <= 10; attempt++) {
-        const chatPayload = {
-            id: uuidv4(),
-            title: 'Innovative Ventures',
-            messages: [{ role: 'user', content: `Hello ${attempt}` }],
-            sources: [],
-            model: 'llama-3.3-70b-instruct',
-            created_at: new Date().toISOString(),
-            language: 'english',
-        };
-        try {
-            const stopSpinner = showSpinner(`Sending chat ${attempt}/10...`, `Chat ${attempt}/10 completed!`);
-            await axios.post(`${CONFIG.BASE_URL}/chat`, chatPayload, {
-                headers,
-                ...proxyConfig,
-            });
-            stopSpinner();
-            logWindow.log(`${colorText(`Chat task ${attempt}/10 completed successfully`, COLORS.GREEN)}`);
-        } catch (err) {
-            logWindow.log(`${colorText(`Error performing chat task ${attempt}/10: ${err.message}`, COLORS.RED)}`);
-        }
-        await new Promise(resolve => setTimeout(resolve, CONFIG.DELAY));
-    }
-}
-
-function askQuestions() {
-    logWindow.log(`${colorText('Crypto Quiz Time!', COLORS.CYAN)}`);
-    const selected = CRYPTO_QUESTIONS.sort(() => 0.5 - Math.random()).slice(0, 2);
-    selected.forEach((q, i) => {
-        logWindow.log(`\nQuestion ${i + 1}: ${q.q}`);
-        q.a.forEach((option, j) => logWindow.log(`${j + 1}. ${option}`));
-        const correctAnswer = q.correct + 1;
-        logWindow.log(`${colorText(`Selecting option ${correctAnswer}: ${q.a[q.correct]}`, COLORS.YELLOW)}`);
-        logWindow.log(`${colorText('Correct!', COLORS.GREEN)}`);
-    });
-    screen.render();
-}
-
-async function updateInfoPanel(wallets, points, refProgress) {
-    const walletInfo = wallets.map(wallet => 
-        `WALLET: ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}\n` +
-        `POINTS: ${points[wallet.address] || 'Unknown'}\n`
-    ).join('---\n');
-    infoPanel.setContent(
-        '{center}{bold}SYSTEM INFO{/bold}{/center}\n\n' +
-        walletInfo +
-        `${colorText(`REFERRALS: ${refProgress.current}/${refProgress.total}`, COLORS.GREEN)}\n` +
-        `${colorText(`STATUS: ONLINE`, COLORS.GREEN)}`
+async function initializeWallet(privateKey, network) {
+  try {
+    const stopSpinner = showSpinner(
+      `Connecting to ${network.name} network...`,
+      `Connected to ${network.name} network!`,
+      60
     );
-    screen.render();
+    let provider;
+    const proxyString = getRandomProxy();
+    let lastError = null;
+    for (const url of network.rpcUrls) {
+      try {
+        if (proxyString) {
+          const proxyConfig = formatProxy(proxyString);
+          logWindow.log(`${colorText(`Using proxy: ${proxyString} with RPC: ${url}`, COLORS.GRAY)}`);
+          const agent = new HttpsProxyAgent({
+            host: proxyConfig.host,
+            port: proxyConfig.port,
+            auth: proxyConfig.auth ? `${proxyConfig.auth.username}:${proxyConfig.auth.password}` : undefined,
+          });
+          provider = new ethers.providers.JsonRpcProvider(
+            {
+              url,
+              agent,
+            },
+            { name: network.name, chainId: network.chainId }
+          );
+        } else {
+          logWindow.log(`${colorText(`Using RPC: ${url}`, COLORS.GRAY)}`);
+          provider = new ethers.providers.JsonRpcProvider(
+            url,
+            { name: network.name, chainId: network.chainId }
+          );
+        }
+        await provider.getNetwork();
+        logWindow.log(`${colorText(`Connected to RPC: ${url}`, COLORS.GREEN)}`);
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+        logWindow.log(`${colorText(`Failed to connect to RPC ${url}: ${error.message}`, COLORS.RED)}`);
+        continue;
+      }
+    }
+    if (lastError) {
+      throw new Error(`All RPCs failed for ${network.name}: ${lastError.message}`);
+    }
+    stopSpinner();
+    const wallet = new ethers.Wallet(privateKey, provider);
+    logWindow.log(`${colorText(`Wallet initialized on ${network.name}: ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}`, COLORS.WHITE)}`);
+    return { provider, wallet };
+  } catch (error) {
+    logWindow.log(`${colorText(`Failed to initialize wallet for key ${privateKey.slice(0, 6)}... on ${network.name}: ${error.message}`, COLORS.RED)}`);
+    throw error;
+  }
 }
 
-function showSpinner(message, completionMessage = 'Done!', duration = 60) {
-    const spinnerStyles = [
-        ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'], // Dots
-        ['-', '=', '≡'], // Bars
-        ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'], // Brail
-    ];
-    const spinner = spinnerStyles[Math.floor(Math.random() * spinnerStyles.length)];
-    let i = 0;
-    logWindow.log(`${colorText(`${message} ${spinner[0]}`, COLORS.YELLOW)}`);
-    const logIndex = logWindow.getLines().length - 1;
-    const interval = setInterval(() => {
-        logWindow.setLine(logIndex, `${colorText(`${message} ${spinner[i++ % spinner.length]}`, COLORS.YELLOW)}`);
-        screen.render();
-    }, duration);
-    return () => {
-        clearInterval(interval);
-        logWindow.setLine(logIndex, `${colorText(completionMessage, COLORS.GREEN)}`);
-        screen.render();
+async function checkBalance(wallet, tokenAddress) {
+  try {
+    const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, wallet);
+    const balance = await tokenContract.balanceOf(wallet.address);
+    const decimals = await tokenContract.decimals();
+    return ethers.utils.formatUnits(balance, decimals);
+  } catch (error) {
+    logWindow.log(`${colorText(`Failed to check balance for token ${tokenAddress}: ${error.message}`, COLORS.RED)}`);
+    return '0';
+  }
+}
+
+async function checkEthBalance(wallet) {
+  try {
+    const balance = await wallet.provider.getBalance(wallet.address);
+    return ethers.utils.formatEther(balance);
+  } catch (error) {
+    logWindow.log(`${colorText(`Failed to check ETH balance: ${error.message}`, COLORS.RED)}`);
+    return '0';
+  }
+}
+
+async function updateWalletInfo(wallets, network) {
+  const walletInfo = [];
+  for (const wallet of wallets) {
+    const ethBalance = await checkEthBalance(wallet);
+    const usdcBalance = await checkBalance(wallet, USDC_ADDRESS);
+    const r2usdBalance = await checkBalance(wallet, R2USD_ADDRESS);
+    const sr2usdBalance = network.name === 'sepolia' ? await checkBalance(wallet, SR2USD_ADDRESS) : 'N/A';
+    walletInfo.push(
+      `WALLET: ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}\n` +
+      `ETH: ${parseFloat(ethBalance).toFixed(4)}\n` +
+      `USDC: ${parseFloat(usdcBalance).toFixed(2)}\n` +
+      `R2USD: ${parseFloat(r2usdBalance).toFixed(2)}\n` +
+      `sR2USD: ${network.name === 'sepolia' ? parseFloat(sr2usdBalance).toFixed(2) : 'N/A'}\n`
+    );
+  }
+  infoPanel.setContent(
+    '{center}{bold}SYSTEM INFO{/bold}{/center}\n\n' +
+    walletInfo.join('---\n') +
+    `{green-fg}STATUS: ONLINE{/green-fg}\n` +
+    `{green-fg}NETWORK: ${network.name} (chainId: ${network.chainId}){/green-fg}`
+  );
+  screen.render();
+}
+
+async function estimateGas(wallet, tx) {
+  try {
+    const estimatedGas = await wallet.estimateGas(tx);
+    // Add 20% buffer
+    return estimatedGas.mul(120).div(100);
+  } catch (error) {
+    logWindow.log(`${colorText(`Failed to estimate gas: ${error.message}`, COLORS.RED)}`);
+    return ethers.BigNumber.from('200000'); // Fallback gas limit
+  }
+}
+
+async function approveToken(wallet, tokenAddress, spenderAddress, amount) {
+  try {
+    const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, wallet);
+    const decimals = await tokenContract.decimals();
+    const currentAllowance = await tokenContract.allowance(wallet.address, spenderAddress);
+    if (currentAllowance.gte(ethers.utils.parseUnits(amount.toString(), decimals))) {
+      logWindow.log(`${colorText('Sufficient allowance already exists', COLORS.GRAY)}`);
+      return true;
+    }
+    logWindow.log(`${colorText(`Approving ${amount} tokens for spending...`, COLORS.MAGENTA)}`);
+    const amountInWei = ethers.utils.parseUnits(amount.toString(), decimals);
+    const tx = await tokenContract.approve(spenderAddress, amountInWei, { gasLimit: 100000 });
+    logWindow.log(`${colorText(`Approval transaction sent: ${tx.hash}`, COLORS.GREEN)}`);
+    logWindow.log(`${colorText(`Explorer: ${wallet.provider.network.explorer}/tx/${tx.hash}`, COLORS.GRAY)}`);
+    const stopSpinner = showSpinner(
+      'Waiting for approval confirmation...',
+      `Approval confirmed!`,
+      60
+    );
+    await tx.wait();
+    stopSpinner();
+    logWindow.log(`${colorText('Approval completed', COLORS.CYAN)}`);
+    await updateWalletInfo([wallet], wallet.provider.network);
+    return true;
+  } catch (error) {
+    logWindow.log(`${colorText(`Failed to approve token: ${error.message}`, COLORS.RED)}`);
+    return false;
+  }
+}
+
+async function estimateGasFees(provider) {
+  try {
+    const feeData = await provider.getFeeData();
+    return {
+      maxFeePerGas: feeData.maxFeePerGas || ethers.utils.parseUnits('50', 'gwei'),
+      maxPriorityFeePerGas: feeData.maxPriorityFeePerGas || ethers.utils.parseUnits('2', 'gwei'),
     };
+  } catch (error) {
+    logWindow.log(`${colorText(`Failed to estimate gas fees, using defaults: ${error.message}`, COLORS.YELLOW)}`);
+    return {
+      maxFeePerGas: ethers.utils.parseUnits('50', 'gwei'),
+      maxPriorityFeePerGas: ethers.utils.parseUnits('2', 'gwei'),
+    };
+  }
+}
+
+async function swapUSDCtoR2USD(wallet, amount, network) {
+  try {
+    const usdcBalance = await checkBalance(wallet, USDC_ADDRESS);
+    logWindow.log(`${colorText(`Current USDC balance: ${usdcBalance}`, COLORS.WHITE)}`);
+    if (parseFloat(usdcBalance) < parseFloat(amount)) {
+      logWindow.log(`${colorText(`Insufficient USDC balance: ${usdcBalance} USDC < ${amount} USDC`, COLORS.RED)}`);
+      return false;
+    }
+    const approved = await approveToken(wallet, USDC_ADDRESS, USDC_TO_R2USD_CONTRACT, amount);
+    if (!approved) return false;
+    const usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, wallet);
+    const decimals = await usdcContract.decimals();
+    const amountInWei = ethers.utils.parseUnits(amount.toString(), decimals);
+    const data = ethers.utils.hexConcat([
+      USDC_TO_R2USD_METHOD_ID,
+      ethers.utils.defaultAbiCoder.encode(
+        ['address', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256'],
+        [wallet.address, amountInWei, 0, 0, 0, 0, 0]
+      ),
+    ]);
+    const gasFees = await estimateGasFees(wallet.provider);
+    const tx = {
+      to: USDC_TO_R2USD_CONTRACT,
+      data: data,
+      ...gasFees,
+    };
+    const gasLimit = await estimateGas(wallet, tx);
+    logWindow.log(`${colorText(`Estimated gas limit: ${gasLimit.toString()}`, COLORS.GRAY)}`);
+    logWindow.log(`${colorText(`Initiating swap: ${amount} USDC to R2USD on ${network.name}`, COLORS.YELLOW)}`);
+    const stopSpinner = showSpinner(
+      `Swapping ${amount} USDC to R2USD...`,
+      `Swap completed: ${amount} USDC to R2USD`,
+      60
+    );
+    const signedTx = await wallet.sendTransaction({
+      ...tx,
+      gasLimit,
+    });
+    logWindow.log(`${colorText(`Transaction sent: ${signedTx.hash}`, COLORS.GREEN)}`);
+    logWindow.log(`${colorText(`Explorer: ${network.explorer}/tx/${signedTx.hash}`, COLORS.GRAY)}`);
+    await signedTx.wait();
+    stopSpinner();
+    const newUSDCBalance = await checkBalance(wallet, USDC_ADDRESS);
+    const newR2USDBalance = await checkBalance(wallet, R2USD_ADDRESS);
+    logWindow.log(`${colorText(`New USDC balance: ${newUSDCBalance}`, COLORS.WHITE)}`);
+    logWindow.log(`${colorText(`New R2USD balance: ${newR2USDBalance}`, COLORS.WHITE)}`);
+    await updateWalletInfo([wallet], network);
+    return true;
+  } catch (error) {
+    logWindow.log(`${colorText(`Failed to swap USDC to R2USD: ${error.message}`, COLORS.RED)}`);
+    if (error.transactionHash) {
+      logWindow.log(`${colorText(`Failed transaction: ${network.explorer}/tx/${error.transactionHash}`, COLORS.RED)}`);
+    }
+    return false;
+  }
+}
+
+async function swapR2USDtoUSDC(wallet, amount, network) {
+  try {
+    const r2usdBalance = await checkBalance(wallet, R2USD_ADDRESS);
+    logWindow.log(`${colorText(`Current R2USD balance: ${r2usdBalance}`, COLORS.WHITE)}`);
+    if (parseFloat(r2usdBalance) < parseFloat(amount)) {
+      logWindow.log(`${colorText(`Insufficient R2USD balance: ${r2usdBalance} R2USD < ${amount} R2USD`, COLORS.RED)}`);
+      return false;
+    }
+    const approved = await approveToken(wallet, R2USD_ADDRESS, R2USD_TO_USDC_CONTRACT, amount);
+    if (!approved) return false;
+    const r2usdContract = new ethers.Contract(R2USD_ADDRESS, ERC20_ABI, wallet);
+    const decimals = await r2usdContract.decimals();
+    const amountInWei = ethers.utils.parseUnits(amount.toString(), decimals);
+    const minOutput = amountInWei.mul(97).div(100);
+    logWindow.log(`${colorText(`Swapping ${amount} R2USD, expecting at least ${ethers.utils.formatUnits(minOutput, decimals)} USDC`, COLORS.GRAY)}`);
+    const data =
+      R2USD_TO_USDC_METHOD_ID +
+      '0000000000000000000000000000000000000000000000000000000000000000' +
+      '0000000000000000000000000000000000000000000000000000000000000001' +
+      amountInWei.toHexString().slice(2).padStart(64, '0') +
+      minOutput.toHexString().slice(2).padStart(64, '0');
+    const gasFees = await estimateGasFees(wallet.provider);
+    const tx = {
+      to: R2USD_TO_USDC_CONTRACT,
+      data: data,
+      ...gasFees,
+    };
+    const gasLimit = await estimateGas(wallet, tx);
+    logWindow.log(`${colorText(`Estimated gas limit: ${gasLimit.toString()}`, COLORS.GRAY)}`);
+    logWindow.log(`${colorText(`Initiating swap: ${amount} R2USD to USDC on ${network.name}`, COLORS.YELLOW)}`);
+    const stopSpinner = showSpinner(
+      `Swapping ${amount} R2USD to USDC...`,
+      `Swap completed: ${amount} R2USD to USDC`,
+      60
+    );
+    const signedTx = await wallet.sendTransaction({
+      ...tx,
+      gasLimit,
+    });
+    logWindow.log(`${colorText(`Transaction sent: ${signedTx.hash}`, COLORS.GREEN)}`);
+    logWindow.log(`${colorText(`Explorer: ${network.explorer}/tx/${signedTx.hash}`, COLORS.GRAY)}`);
+    const receipt = await signedTx.wait();
+    stopSpinner();
+    if (receipt.status === 0) {
+      logWindow.log(`${colorText(`Transaction reverted. Check contract state or logs.`, COLORS.RED)}`);
+      return false;
+    }
+    const newUSDCBalance = await checkBalance(wallet, USDC_ADDRESS);
+    const newR2USDBalance = await checkBalance(wallet, R2USD_ADDRESS);
+    logWindow.log(`${colorText(`New USDC balance: ${newUSDCBalance}`, COLORS.WHITE)}`);
+    logWindow.log(`${colorText(`New R2USD balance: ${newR2USDBalance}`, COLORS.WHITE)}`);
+    await updateWalletInfo([wallet], network);
+    return true;
+  } catch (error) {
+    logWindow.log(`${colorText(`Failed to swap R2USD to USDC: ${error.message}`, COLORS.RED)}`);
+    if (error.transactionHash) {
+      logWindow.log(`${colorText(`Failed transaction: ${network.explorer}/tx/${error.transactionHash}`, COLORS.RED)}`);
+    }
+    return false;
+  }
+}
+
+async function stakeR2USD(wallet, amount, network) {
+  if (network.name !== 'sepolia') {
+    logWindow.log(`${colorText(`Staking not supported on ${network.name}`, COLORS.RED)}`);
+    return false;
+  }
+  try {
+    const r2usdBalance = await checkBalance(wallet, R2USD_ADDRESS);
+    logWindow.log(`${colorText(`Current R2USD balance: ${r2usdBalance}`, COLORS.WHITE)}`);
+    if (parseFloat(r2usdBalance) < parseFloat(amount)) {
+      logWindow.log(`${colorText(`Insufficient R2USD balance: ${r2usdBalance} R2USD < ${amount} R2USD`, COLORS.RED)}`);
+      return false;
+    }
+    const r2usdContract = new ethers.Contract(R2USD_ADDRESS, ERC20_ABI, wallet);
+    const decimals = await r2usdContract.decimals();
+    const amountInWei = ethers.utils.parseUnits(amount.toString(), decimals);
+    const currentAllowance = await r2usdContract.allowance(wallet.address, STAKE_R2USD_CONTRACT);
+    if (currentAllowance.lt(amountInWei)) {
+      logWindow.log(`${colorText(`Approving ${amount} R2USD for staking...`, COLORS.MAGENTA)}`);
+      const approveTx = await r2usdContract.approve(STAKE_R2USD_CONTRACT, amountInWei, { gasLimit: 100000 });
+      logWindow.log(`${colorText(`Approval transaction sent: ${approveTx.hash}`, COLORS.GREEN)}`);
+      logWindow.log(`${colorText(`Explorer: ${network.explorer}/tx/${approveTx.hash}`, COLORS.GRAY)}`);
+      const stopSpinner = showSpinner(
+        'Waiting for approval confirmation...',
+        `Approval confirmed!`,
+        60
+      );
+      await approveTx.wait();
+      stopSpinner();
+      logWindow.log(`${colorText('Approval completed', COLORS.CYAN)}`);
+    } else {
+      logWindow.log(`${colorText('Sufficient allowance already exists', COLORS.GRAY)}`);
+    }
+    const data =
+      STAKE_R2USD_METHOD_ID +
+      amountInWei.toHexString().slice(2).padStart(64, '0') +
+      '0'.repeat(576);
+    const gasFees = await estimateGasFees(wallet.provider);
+    const tx = {
+      to: STAKE_R2USD_CONTRACT,
+      data: data,
+      ...gasFees,
+    };
+    const gasLimit = await estimateGas(wallet, tx);
+    logWindow.log(`${colorText(`Estimated gas limit: ${gasLimit.toString()}`, COLORS.GRAY)}`);
+    logWindow.log(`${colorText(`Initiating staking: ${amount} R2USD to sR2USD`, COLORS.YELLOW)}`);
+    const stopSpinner = showSpinner(
+      `Staking ${amount} R2USD to sR2USD...`,
+      `Staking completed: ${amount} R2USD to sR2USD`,
+      60
+    );
+    const signedTx = await wallet.sendTransaction({
+      ...tx,
+      gasLimit,
+    });
+    logWindow.log(`${colorText(`Transaction sent: ${signedTx.hash}`, COLORS.GREEN)}`);
+    logWindow.log(`${colorText(`Explorer: ${network.explorer}/tx/${signedTx.hash}`, COLORS.GRAY)}`);
+    const receipt = await signedTx.wait();
+    stopSpinner();
+    if (receipt.status === 0) {
+      logWindow.log(`${colorText(`Transaction reverted. Check contract state or logs.`, COLORS.RED)}`);
+      return false;
+    }
+    const newR2USDBalance = await checkBalance(wallet, R2USD_ADDRESS);
+    const newSR2USDBalance = await checkBalance(wallet, SR2USD_ADDRESS);
+    logWindow.log(`${colorText(`New R2USD balance: ${newR2USDBalance}`, COLORS.WHITE)}`);
+    logWindow.log(`${colorText(`New sR2USD balance: ${newSR2USDBalance}`, COLORS.WHITE)}`);
+    await updateWalletInfo([wallet], network);
+    return true;
+  } catch (error) {
+    logWindow.log(`${colorText(`Failed to stake R2USD: ${error.message}`, COLORS.RED)}`);
+    if (error.transactionHash) {
+      logWindow.log(`${colorText(`Failed transaction: ${network.explorer}/tx/${error.transactionHash}`, COLORS.RED)}`);
+    }
+    return false;
+  }
+}
+
+// UI helper functions
+function showSpinner(message, completionMessage = 'Done!', duration = 60) {
+  const spinnerStyles = [
+    ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'], // Dots
+    ['-', '=', '≡'], // Bars
+    ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'], // Brail
+  ];
+  const spinner = spinnerStyles[Math.floor(Math.random() * spinnerStyles.length)];
+  let i = 0;
+  logWindow.log(`${colorText(`${message} ${spinner[0]}`, COLORS.YELLOW)}`);
+  const logIndex = logWindow.getLines().length - 1;
+  const interval = setInterval(() => {
+    logWindow.setLine(logIndex, `${colorText(`${message} ${spinner[i++ % spinner.length]}`, COLORS.YELLOW)}`);
+    screen.render();
+  }, duration);
+  return () => {
+    clearInterval(interval);
+    logWindow.setLine(logIndex, `${colorText(completionMessage, COLORS.GREEN)}`);
+    screen.render();
+  };
 }
 
 function getInput(promptText) {
-    return new Promise((resolve) => {
-        logWindow.log(`${colorText(promptText, COLORS.YELLOW)}`);
-        inputBox.setValue('');
-        inputBox.show();
-        screen.render();
-        inputBox.once('submit', (value) => {
-            inputBox.hide();
-            screen.render();
-            resolve(value);
-        });
-        inputBox.focus();
-        inputBox.readInput();
+  return new Promise((resolve) => {
+    logWindow.log(`${colorText(promptText, COLORS.YELLOW)}`);
+    inputBox.setValue('');
+    inputBox.show();
+    screen.render();
+    inputBox.once('submit', (value) => {
+      inputBox.hide();
+      screen.render();
+      resolve(value);
     });
+    inputBox.focus();
+    inputBox.readInput();
+  });
 }
 
 function showBanner() {
-    const banner = [
-        '>>> SYSTEM BOOT INITIATED',
-        '[[ KLOK AUTO BOT ]] - BY KAZUHA787',
-        '----------------------------------',
-    ];
-    banner.forEach((line, index) => {
-        setTimeout(() => {
-            logWindow.log(`${colorText(line, index === 1 ? COLORS.CYAN : COLORS.GREEN)}`);
-            screen.render();
-        }, index * 150);
-    });
+  const banner = [
+    '>>> SYSTEM BOOT INITIATED',
+    '[[ R2 AUTO BOT ]] - BY KAZUHA',
+    '----------------------------------',
+  ];
+  banner.forEach((line, index) => {
+    setTimeout(() => {
+      logWindow.log(`${colorText(line, index === 1 ? COLORS.CYAN : COLORS.GREEN)}`);
+      screen.render();
+    }, index * 150);
+  });
 }
 
-async function authenticateAndAct(action, refCount, headers, proxyConfig, referralCodes) {
-    const wallets = [];
-    const points = {};
-    if (action === '1') {
-        for (let attempt = 0; attempt < Math.max(1, refCount); attempt++) {
-            logWindow.log(`${colorText(`Referral attempt ${attempt + 1}/${refCount}`, COLORS.CYAN)}`);
-            try {
-                const stopSpinner = showSpinner('Generating new Ethereum wallet...', 'Wallet created!');
-                const web3 = new Web3();
-                const account = web3.eth.accounts.create();
-                const privateKey = account.privateKey;
-                const address = toChecksumAddress(account.address);
-                stopSpinner();
-                logWindow.log(`${colorText(`Wallet created: ${address}`, COLORS.GREEN)}`);
-                await saveWallet(privateKey);
-                wallets.push({ address });
+async function showMenu(wallets) {
+  const menuItems = [
+    `1. Swaps and Staking (Manual)`,
+    `2. Auto Run All`,
+    `3. Exit`,
+  ];
+  logWindow.log(`${colorText('========== R2 AUTO BOT MENU ==========', COLORS.WHITE)}`);
+  for (const item of menuItems) {
+    logWindow.log(`${colorText(item, COLORS.YELLOW)}`);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    screen.render();
+  }
+  logWindow.log(`${colorText('=====================================', COLORS.WHITE)}`);
 
-                const refCode = getRandomReferralCode(referralCodes);
-                logWindow.log(`${colorText(`Using referral code: ${refCode || 'None'}`, COLORS.YELLOW)}`);
-
-                logWindow.log(`${colorText('Authenticating wallet...', COLORS.YELLOW)}`);
-                await new Promise(resolve => setTimeout(resolve, CONFIG.DELAY));
-                const nonce = web3.utils.randomHex(32).slice(2);
-                const timestamp = new Date().toISOString();
-                const message = (
-                    `klokapp.ai wants you to sign in with your Ethereum account:\n` +
-                    `${address}\n\n\n` +
-                    `URI: https://klokapp.ai/\n` +
-                    `Version: 1\n` +
-                    `Chain ID: 1\n` +
-                    `Nonce: ${nonce}\n` +
-                    `Issued At: ${timestamp}`
-                );
-                const signedMessage = account.sign(message).signature;
-                const payload = {
-                    signedMessage,
-                    message,
-                    referral_code: refCode || '',
-                    recaptcha_token: '',
-                };
-
-                const stopAuthSpinner = showSpinner('Sending authentication request...', 'Authentication successful!');
-                const response = await axios.post(`${CONFIG.BASE_URL}/verify`, payload, { headers, ...proxyConfig });
-                if (response.data.message === 'Verification successful') {
-                    const sessionToken = response.data.session_token;
-                    await saveToken(address, sessionToken);
-                    stopAuthSpinner();
-                    logWindow.log(`${colorText('Authentication successful', COLORS.GREEN)}`);
-                    if (refCode) logWindow.log(`${colorText('Referral code submitted', COLORS.GREEN)}`);
-
-                    headers['x-session-token'] = sessionToken;
-
-                    logWindow.log(`${colorText('Checking points balance...', COLORS.YELLOW)}`);
-                    await new Promise(resolve => setTimeout(resolve, CONFIG.DELAY));
-                    const pointsResponse = await axios.get(`${CONFIG.BASE_URL}/points`, { headers, ...proxyConfig });
-                    points[address] = pointsResponse.data.total_points || pointsResponse.data.points?.total_points || 'Unknown';
-                    logWindow.log(`${colorText(`Points balance: ${points[address]}`, COLORS.GREEN)}`);
-
-                    await updateInfoPanel(wallets, points, { current: attempt + 1, total: refCount });
-
-                    await completeTasks(headers, proxyConfig);
-                    await performAutoChat(headers, proxyConfig);
-
-                    logWindow.log(`${colorText('Checking points balance after tasks...', COLORS.YELLOW)}`);
-                    await new Promise(resolve => setTimeout(resolve, CONFIG.DELAY));
-                    const finalPointsResponse = await axios.get(`${CONFIG.BASE_URL}/points`, { headers, ...proxyConfig });
-                    points[address] = finalPointsResponse.data.total_points || finalPointsResponse.data.points?.total_points || 'Unknown';
-                    logWindow.log(`${colorText(`Points balance after tasks: ${points[address]}`, COLORS.GREEN)}`);
-
-                    askQuestions();
-                    await updateInfoPanel(wallets, points, { current: attempt + 1, total: refCount });
-                } else {
-                    stopAuthSpinner();
-                    logWindow.log(`${colorText('Authentication failed', COLORS.RED)}`);
-                    continue;
-                }
-            } catch (err) {
-                logWindow.log(`${colorText(`Error: ${err.message}`, COLORS.RED)}`);
-                continue;
-            }
-        }
-    } else if (action === '2') {
-        logWindow.log(`${colorText('Loading X session tokens from chats.txt...', COLORS.YELLOW)}`);
-        const accounts = await loadXTokens();
-        if (!accounts.length) {
-            logWindow.log(`${colorText('No valid accounts found in chatx.txt. Please add tokens and try again.', COLORS.RED)}`);
-            return;
-        }
-        for (const [index, { address, token }] of accounts.entries()) {
-            logWindow.log(`${colorText(`Processing account ${index + 1}/${accounts.length}: ${address}`, COLORS.CYAN)}`);
-            headers['x-session-token'] = token;
-            wallets.push({ address });
-            await performAutoChat(headers, proxyConfig);
-            await completeTasks(headers, proxyConfig);
-            logWindow.log(`${colorText('Checking points balance after tasks...', COLORS.YELLOW)}`);
-            try {
-                await new Promise(resolve => setTimeout(resolve, CONFIG.DELAY));
-                const response = await axios.get(`${CONFIG.BASE_URL}/points`, { headers, ...proxyConfig });
-                points[address] = response.data.total_points || response.data.points?.total_points || 'Unknown';
-                logWindow.log(`${colorText(`Points balance after tasks: ${points[address]}`, COLORS.GREEN)}`);
-            } catch (err) {
-                logWindow.log(`${colorText(`Error checking points after tasks: ${err.message}`, COLORS.RED)}`);
-            }
-            askQuestions();
-            await updateInfoPanel(wallets, points, { current: index + 1, total: accounts.length });
-        }
-    }
+  const option = await getInput('Select an option (1-3): ');
+  switch (option) {
+    case '1':
+      await handleSwapsAndStaking(wallets);
+      break;
+    case '2':
+      await handleAutoRunAll(wallets);
+      break;
+    case '3':
+      logWindow.log(`${colorText(`Exiting application...`, COLORS.GRAY)}`);
+      process.exit(0);
+    default:
+      logWindow.log(`${colorText('Invalid option. Please select 1-3.', COLORS.YELLOW)}`);
+      await showMenu(wallets);
+      break;
+  }
 }
 
-async function showMenu() {
-    const menuItems = [
-        `1. Start Referrals`,
-        `2. Start Chat and Tasks`,
-        `3. Exit`,
-    ];
-    logWindow.log(`${colorText('========== KLOK AUTO BOT MENU ==========', COLORS.WHITE)}`);
-    for (const item of menuItems) {
-        logWindow.log(`${colorText(item, COLORS.YELLOW)}`);
-        await new Promise(resolve => setTimeout(resolve, 100));
-        screen.render();
+async function selectWallet(wallets) {
+  if (wallets.length === 1) {
+    logWindow.log(`${colorText(`Using wallet: ${wallets[0].wallet.address.slice(0, 6)}...${wallets[0].wallet.address.slice(-4)}`, COLORS.WHITE)}`);
+    return wallets[0];
+  }
+  logWindow.log(`${colorText('Available wallets:', COLORS.WHITE)}`);
+  wallets.forEach((walletObj, index) => {
+    logWindow.log(`${colorText(`${index + 1}. ${walletObj.wallet.address.slice(0, 6)}...${walletObj.wallet.address.slice(-4)}`, COLORS.YELLOW)}`);
+  });
+  const input = await getInput('Select wallet number (or "all" for all wallets): ');
+  if (input.toLowerCase() === 'all') {
+    return wallets;
+  }
+  const index = parseInt(input) - 1;
+  if (isNaN(index) || index < 0 || index >= wallets.length) {
+    logWindow.log(`${colorText('Invalid selection. Using first wallet.', COLORS.YELLOW)}`);
+    return wallets[0];
+  }
+  logWindow.log(`${colorText(`Using wallet: ${wallets[index].wallet.address.slice(0, 6)}...${wallets[index].wallet.address.slice(-4)}`, COLORS.WHITE)}`);
+  return wallets[index];
+}
+
+async function selectNetwork() {
+  if (NETWORKS.length === 1) {
+    logWindow.log(`${colorText(`Using network: ${NETWORKS[0].name}`, COLORS.WHITE)}`);
+    return [NETWORKS[0]];
+  }
+  logWindow.log(`${colorText('Available networks:', COLORS.WHITE)}`);
+  NETWORKS.forEach((network, index) => {
+    logWindow.log(`${colorText(`${index + 1}. ${network.name}`, COLORS.YELLOW)}`);
+  });
+  const input = await getInput('Select network number (or "all" for all networks): ');
+  if (input.toLowerCase() === 'all') {
+    return NETWORKS;
+  }
+  const index = parseInt(input) - 1;
+  if (isNaN(index) || index < 0 || index >= NETWORKS.length) {
+    logWindow.log(`${colorText('Invalid selection. Using first network.', COLORS.YELLOW)}`);
+    return [NETWORKS[0]];
+  }
+  logWindow.log(`${colorText(`Using network: ${NETWORKS[index].name}`, COLORS.WHITE)}`);
+  return [NETWORKS[index]];
+}
+
+async function handleSwapsAndStaking(wallets) {
+  try {
+    const selectedWallets = wallets.length === 1 ? wallets[0] : await selectWallet(wallets);
+    const isAllWallets = Array.isArray(selectedWallets);
+    const walletList = isAllWallets ? selectedWallets : [selectedWallets];
+
+    const selectedNetworks = await selectNetwork();
+    const isAllNetworks = selectedNetworks.length > 1;
+
+    // Popup for amount and number of transactions
+    logWindow.log(`${colorText('=== Swap/Staking Configuration ===', COLORS.CYAN)}`);
+    const amount = await getInput('Enter amount for swaps/staking (or "back" to return): ');
+    if (amount.toLowerCase() === 'back') {
+      await showMenu(wallets);
+      return;
     }
-    logWindow.log(`${colorText('=====================================', COLORS.WHITE)}`);
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      logWindow.log(`${colorText('Invalid amount. Enter a positive number.', COLORS.RED)}`);
+      await handleSwapsAndStaking(wallets);
+      return;
+    }
+    const numTxs = await getInput('Enter number of transactions (or "back" to return): ');
+    if (numTxs.toLowerCase() === 'back') {
+      await showMenu(wallets);
+      return;
+    }
+    const parsedNumTxs = parseInt(numTxs);
+    if (isNaN(parsedNumTxs) || parsedNumTxs <= 0) {
+      logWindow.log(`${colorText('Invalid number. Enter a positive integer.', COLORS.RED)}`);
+      await handleSwapsAndStaking(wallets);
+      return;
+    }
+    logWindow.log(`${colorText('=================================', COLORS.CYAN)}`);
 
-    const option = await getInput('Select an option (1-3): ');
-    let proxyConfig = null;
-    let action = null;
-    let refCount = 1;
-    const referralCodes = await loadReferralCodes();
+    const runSwapCycle = async () => {
+      for (const network of selectedNetworks) {
+        logWindow.log(`${colorText(`Processing network: ${network.name}`, COLORS.CYAN)}`);
+        for (const walletObj of walletList) {
+          // Initialize wallet for the current network if not already initialized
+          let wallet = walletObj.wallet;
+          if (walletObj.network.name !== network.name) {
+            const result = await initializeWallet(walletObj.privateKey, network);
+            wallet = result.wallet;
+          }
+          logWindow.log(`${colorText(`Processing wallet: ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)} on ${network.name}`, COLORS.WHITE)}`);
 
-    switch (option) {
-        case '1':
-            logWindow.log(`${colorText('=== Referral Configuration ===', COLORS.CYAN)}`);
-            const refCountInput = await getInput('How many referral attempts? (1 or more, or "back" to return): ');
-            if (refCountInput.toLowerCase() === 'back') {
-                await showMenu();
-                return;
+          // USDC to R2USD Swaps
+          logWindow.log(`${colorText(`Starting ${parsedNumTxs} USDC to R2USD swaps`, COLORS.CYAN)}`);
+          for (let i = 1; i <= parsedNumTxs; i++) {
+            logWindow.log(`${colorText(`Swap ${i}/${parsedNumTxs}: ${parsedAmount} USDC to R2USD`, COLORS.YELLOW)}`);
+            const success = await swapUSDCtoR2USD(wallet, parsedAmount, network);
+            logWindow.log(
+              `${colorText(`Swap ${i} ${success ? 'completed!' : 'failed.'}`, success ? COLORS.GREEN : COLORS.RED)}`
+            );
+            if (!success) break;
+            await new Promise(resolve => setTimeout(resolve, 1000)); // 1s delay
+          }
+
+          // R2USD to USDC Swaps
+          logWindow.log(`${colorText(`Starting ${parsedNumTxs} R2USD to USDC swaps`, COLORS.CYAN)}`);
+          for (let i = 1; i <= parsedNumTxs; i++) {
+            logWindow.log(`${colorText(`Swap ${i}/${parsedNumTxs}: ${parsedAmount} R2USD to USDC`, COLORS.YELLOW)}`);
+            const success = await swapR2USDtoUSDC(wallet, parsedAmount, network);
+            logWindow.log(
+              `${colorText(`Swap ${i} ${success ? 'completed!' : 'failed.'}`, success ? COLORS.GREEN : COLORS.RED)}`
+            );
+            if (!success) break;
+            await new Promise(resolve => setTimeout(resolve, 1000)); // 1s delay
+          }
+
+          // R2USD to sR2USD Staking (only for Sepolia)
+          if (network.name === 'sepolia') {
+            logWindow.log(`${colorText(`Starting ${parsedNumTxs} R2USD to sR2USD stakes`, COLORS.CYAN)}`);
+            for (let i = 1; i <= parsedNumTxs; i++) {
+              logWindow.log(`${colorText(`Stake ${i}/${parsedNumTxs}: ${parsedAmount} R2USD to sR2USD`, COLORS.YELLOW)}`);
+              const success = await stakeR2USD(wallet, parsedAmount, network);
+              logWindow.log(
+                `${colorText(`Stake ${i} ${success ? 'completed!' : 'failed.'}`, success ? COLORS.GREEN : COLORS.RED)}`
+              );
+              if (!success) break;
+              await new Promise(resolve => setTimeout(resolve, 1000)); // 1s delay
             }
-            const parsedRefCount = parseInt(refCountInput);
-            if (isNaN(parsedRefCount) || parsedRefCount <= 0) {
-                logWindow.log(`${colorText('Invalid number. Enter a positive integer.', COLORS.RED)}`);
-                await showMenu();
-                return;
-            }
-            refCount = parsedRefCount;
-            action = '1';
-            break;
-        case '2':
-            action = '2';
-            break;
-        case '3':
-            logWindow.log(`${colorText('Exiting application...', COLORS.GRAY)}`);
-            process.exit(0);
-        default:
-            logWindow.log(`${colorText('Invalid option. Please select 1-3.', COLORS.YELLOW)}`);
-            await showMenu();
-            return;
-    }
+          }
 
-    logWindow.log(`${colorText('=== Connection Configuration ===', COLORS.CYAN)}`);
-    const connectionChoice = await getInput('Select connection (1 for Proxy, 2 for Direct, or "back" to return): ');
-    if (connectionChoice.toLowerCase() === 'back') {
-        await showMenu();
-        return;
-    }
-    if (connectionChoice === '1') {
-        const stopSpinner = showSpinner('Selecting working proxy...', 'Proxy selected!');
-        proxyConfig = await selectWorkingProxy();
-        stopSpinner();
-        if (!proxyConfig) {
-            logWindow.log(`${colorText('Exiting due to no functional proxies.', COLORS.RED)}`);
-            process.exit(1);
+          logWindow.log(`${colorText(`Completed all tasks for ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)} on ${network.name}`, COLORS.GREEN)}`);
         }
-    } else if (connectionChoice === '2') {
-        logWindow.log(`${colorText('Direct connection selected', COLORS.GREEN)}`);
-    } else {
-        logWindow.log(`${colorText('Invalid option. Please enter 1 or 2.', COLORS.YELLOW)}`);
-        await showMenu();
-        return;
-    }
+      }
 
-    const headers = {
-        Accept: '*/*',
-        'Content-Type': 'application/json',
-        Origin: 'https://klokapp.ai',
-        Referer: 'https://klokapp.ai/',
-        'User-Agent': [
-            'Mozilla/5.0 (Linux; Android 13; SM-S901B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
-            'Mozilla/5.0 (iPhone14,3; U; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/602.1.50 (KHTML, like Gecko) Version/10.0 Mobile/19A346 Safari/602.1',
-        ][Math.floor(Math.random() * 2)],
+      logWindow.log(`${colorText(`All swaps/stakes completed! Pausing for 24 hours...`, COLORS.YELLOW)}`);
+      await new Promise(resolve => setTimeout(resolve, 24 * 60 * 60 * 1000)); // 24-hour delay
+      logWindow.log(`${colorText(`Restarting swap cycle...`, COLORS.CYAN)}`);
+      await handleSwapsAndStaking(wallets); // Re-prompt for new amount and numTxs
     };
 
-    await authenticateAndAct(action, refCount, headers, proxyConfig, referralCodes);
-    logWindow.log(`${colorText('Operation completed!', COLORS.CYAN)}`);
-    await showMenu();
+    await runSwapCycle();
+  } catch (error) {
+    logWindow.log(`${colorText(`Error in swap/staking cycle: ${error.message}`, COLORS.RED)}`);
+    await showMenu(wallets);
+  }
+}
+
+async function handleAutoRunAll(wallets) {
+  try {
+    // Prompt for amount and number of transactions
+    logWindow.log(`${colorText('=== Auto Run All Configuration ===', COLORS.CYAN)}`);
+    const amount = await getInput('Enter amount for swaps/staking: ');
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      logWindow.log(`${colorText('Invalid amount. Enter a positive number.', COLORS.RED)}`);
+      await showMenu(wallets);
+      return;
+    }
+    const numTxs = await getInput('Enter number of transactions: ');
+    const parsedNumTxs = parseInt(numTxs);
+    if (isNaN(parsedNumTxs) || parsedNumTxs <= 0) {
+      logWindow.log(`${colorText('Invalid number. Enter a positive integer.', COLORS.RED)}`);
+      await showMenu(wallets);
+      return;
+    }
+    logWindow.log(`${colorText('=================================', COLORS.CYAN)}`);
+
+    const runAutoCycle = async () => {
+      // Process networks in order: sepolia, plume_testnet, arbitrum_sepolia
+      for (const network of NETWORKS) {
+        logWindow.log(`${colorText(`Processing network: ${network.name}`, COLORS.CYAN)}`);
+        for (const walletObj of wallets) {
+          // Initialize wallet for the current network
+          let wallet;
+          try {
+            const result = await initializeWallet(walletObj.privateKey, network);
+            wallet = result.wallet;
+          } catch (error) {
+            logWindow.log(`${colorText(`Skipping wallet ${walletObj.wallet.address.slice(0, 6)}... on ${network.name} due to initialization error`, COLORS.RED)}`);
+            continue;
+          }
+          logWindow.log(`${colorText(`Processing wallet: ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)} on ${network.name}`, COLORS.WHITE)}`);
+
+          // USDC to R2USD Swaps
+          logWindow.log(`${colorText(`Starting ${parsedNumTxs} USDC to R2USD swaps`, COLORS.CYAN)}`);
+          for (let i = 1; i <= parsedNumTxs; i++) {
+            logWindow.log(`${colorText(`Swap ${i}/${parsedNumTxs}: ${parsedAmount} USDC to R2USD`, COLORS.YELLOW)}`);
+            const success = await swapUSDCtoR2USD(wallet, parsedAmount, network);
+            logWindow.log(
+              `${colorText(`Swap ${i} ${success ? 'completed!' : 'failed.'}`, success ? COLORS.GREEN : COLORS.RED)}`
+            );
+            if (!success) break;
+            await new Promise(resolve => setTimeout(resolve, 1000)); // 1s delay
+          }
+
+          // R2USD to USDC Swaps
+          logWindow.log(`${colorText(`Starting ${parsedNumTxs} R2USD to USDC swaps`, COLORS.CYAN)}`);
+          for (let i = 1; i <= parsedNumTxs; i++) {
+            logWindow.log(`${colorText(`Swap ${i}/${parsedNumTxs}: ${parsedAmount} R2USD to USDC`, COLORS.YELLOW)}`);
+            const success = await swapR2USDtoUSDC(wallet, parsedAmount, network);
+            logWindow.log(
+              `${colorText(`Swap ${i} ${success ? 'completed!' : 'failed.'}`, success ? COLORS.GREEN : COLORS.RED)}`
+            );
+            if (!success) break;
+            await new Promise(resolve => setTimeout(resolve, 1000)); // 1s delay
+          }
+
+          // R2USD to sR2USD Staking (only for Sepolia)
+          if (network.name === 'sepolia') {
+            logWindow.log(`${colorText(`Starting ${parsedNumTxs} R2USD to sR2USD stakes`, COLORS.CYAN)}`);
+            for (let i = 1; i <= parsedNumTxs; i++) {
+              logWindow.log(`${colorText(`Stake ${i}/${parsedNumTxs}: ${parsedAmount} R2USD to sR2USD`, COLORS.YELLOW)}`);
+              const success = await stakeR2USD(wallet, parsedAmount, network);
+              logWindow.log(
+                `${colorText(`Stake ${i} ${success ? 'completed!' : 'failed.'}`, success ? COLORS.GREEN : COLORS.RED)}`
+              );
+              if (!success) break;
+              await new Promise(resolve => setTimeout(resolve, 1000)); // 1s delay
+            }
+          }
+
+          logWindow.log(`${colorText(`Completed all tasks for ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)} on ${network.name}`, COLORS.GREEN)}`);
+        }
+      }
+
+      logWindow.log(`${colorText(`All networks processed! Pausing for 24 hours...`, COLORS.YELLOW)}`);
+      await new Promise(resolve => setTimeout(resolve, 24 * 60 * 60 * 1000)); // 24-hour delay
+      logWindow.log(`${colorText(`Restarting auto-run cycle...`, COLORS.CYAN)}`);
+      await runAutoCycle(); // Restart the cycle
+    };
+
+    await runAutoCycle();
+  } catch (error) {
+    logWindow.log(`${colorText(`Error in auto-run cycle: ${error.message}`, COLORS.RED)}`);
+    await showMenu(wallets);
+  }
 }
 
 async function main() {
-    try {
-        await new Promise(resolve => {
-            showBanner();
-            setTimeout(resolve, 450); // Wait for banner animation (3 lines * 150ms)
-        });
+  try {
+    // Show banner first
+    await new Promise(resolve => {
+      showBanner();
+      setTimeout(resolve, 450); // Wait for banner animation (3 lines * 150ms)
+    });
 
-        infoPanel.setContent(
-            '{center}{bold}SYSTEM INFO{/bold}{/center}\n\n' +
-            `${colorText('STATUS: INITIALIZING', COLORS.YELLOW)}\n` +
-            `${colorText('WALLETS: 0', COLORS.YELLOW)}\n` +
-            `${colorText('REFERRALS: 0/0', COLORS.YELLOW)}`
-        );
-        screen.render();
-
-        await showMenu();
-    } catch (error) {
-        logWindow.log(`${colorText(`Fatal error: ${error.message}`, COLORS.RED)}`);
-        process.exit(1);
+    loadProxies();
+    loadPrivateKeys();
+    const wallets = [];
+    // Initialize each private key only once for the first network initially
+    for (const privateKey of privateKeys) {
+      try {
+        const result = await initializeWallet(privateKey, NETWORKS[0]);
+        wallets.push({ privateKey, wallet: result.wallet, network: NETWORKS[0] });
+      } catch (error) {
+        // Skip failed wallet initialization
+      }
     }
+    if (wallets.length === 0) {
+      logWindow.log(`${colorText(`No valid wallets initialized. Exiting.`, COLORS.RED)}`);
+      process.exit(1);
+    }
+    // Update info for the first network's wallets initially
+    await updateWalletInfo(wallets.map(w => w.wallet), NETWORKS[0]);
+
+    // Show menu immediately
+    await showMenu(wallets);
+  } catch (error) {
+    logWindow.log(`${colorText(`Fatal error: ${error.message}`, COLORS.RED)}`);
+    process.exit(1);
+  }
 }
 
 main();
